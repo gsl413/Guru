@@ -64,16 +64,16 @@ export default function App() {
   const [ionVelocity, setIonVelocity] = useState(20000);
   const [deorbitAltitude, setDeorbitAltitude] = useState(500);
 
-    const [email, setEmail] = useState("");
+  const [email, setEmail] = useState("");
+
   const handleSendEmail = () => {
     if (!email) {
       alert("Please enter an email address.");
       return;
     }
     alert(`Results sent to ${email}!`);
-    setEmail(""); // clear the field after sending
+    setEmail("");
   };
-  
 
   useEffect(() => {
     if (!isOverride && platform !== "Custom") {
@@ -213,8 +213,7 @@ export default function App() {
               </div>
             </SectionFrame>
           )}
-          
-                    {/* ---> NEW SECTION FOR THE EMAIL BOX <--- */}
+
           <SectionFrame title="Send Results" color="text-violet-400" borderColor="border-violet-500/20">
             <div className="flex flex-col md:flex-row gap-4 items-end">
               <div className="flex-1 w-full group">
@@ -235,9 +234,6 @@ export default function App() {
               </button>
             </div>
           </SectionFrame>
-          {/* ---> END ADDITION <--- */}
-
-
         </main>
       </div>
     </div>
