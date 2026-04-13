@@ -11,10 +11,11 @@ const PLATFORM_AREAS: Record<string, number> = {
   "3U": 0.01, "6U": 0.03, "12U": 0.06, "24U": 0.12,
 };
 
-const THRUSTERS: Record<Thruster, { thrust: number; tp: number }> = {
-  EMCAT: { thrust: 200e-6, tp: 12.5e-6 },
-  "EMCAT MPD": { thrust: 2e-3, tp: 44e-6 },
-  JJDrive: { thrust: 30e-3, tp: 44e-6 },
+// Thruster T/P ratios as per your requirements
+const THRUSTERS: Record<Thruster, { tp: number }> = {
+  "EMCAT": { tp: 10e-6 },     // 10 micro-newton/W
+  "EMCAT MPD": { tp: 44e-6 }, // 44 micro-newton/W
+  "JJDrive": { tp: 100e-6 },  // 100 micro-newton/W
 };
 
 const DENSITY_TABLE: Record<number, number> = {
@@ -41,12 +42,12 @@ export default function App() {
   const [platform, setPlatform] = useState("6U");
   const [frontalArea, setFrontalArea] = useState(0.03);
   const [isOverride, setIsOverride] = useState(false);
-  
   const [mass, setMass] = useState(12);
   const [cd, setCd] = useState(2.2);
   const [powerAvailable, setPowerAvailable] = useState(100);
   const [thruster, setThruster] = useState<Thruster>("EMCAT MPD");
   
+  // Service-specific Inputs
   const [initialAltitude, setInitialAltitude] = useState(300);
   const [finalAltitude, setFinalAltitude] = useState(500);
   const [skAltitude, setSkAltitude] = useState(300);
@@ -54,13 +55,13 @@ export default function App() {
   const [ionVelocity, setIonVelocity] = useState(20000);
   const [deorbitAltitude, setDeorbitAltitude] = useState(500);
 
-  // Sync Frontal Area with Platform Size unless overridden
   useEffect(() => {
     if (!isOverride && platform !== "Custom") {
       setFrontalArea(PLATFORM_AREAS[platform]);
     }
   }, [platform, isOverride]);
 
+  // 1. Orbit Raising Logic
   const orbitRaising = useMemo(() => {
     if (!services.includes("orbitRaising")) return null;
     const r1 = EARTH_RADIUS + initialAltitude * 1000, r2 = EARTH_RADIUS + finalAltitude * 1000;
@@ -68,66 +69,75 @@ export default function App() {
     const dv1 = Math.sqrt(MU / r1) * (Math.sqrt((2 * r2) / (r1 + r2)) - 1);
     const dv2 = Math.sqrt(MU / r2) * (1 - Math.sqrt((2 * r1) / (r1 + r2)));
     const baseline = Math.abs(dv1) + Math.abs(dv2);
-    const density = interpolateDensity(initialAltitude);
-    const dragAcc = 0.5 * (cd * frontalArea / mass) * density * Math.pow(ORBITAL_VELOCITY, 2);
-    const semiMajorDecay = (-2 * Math.pow(aTransfer, 1.5) * dragAcc) / Math.sqrt(MU);
+    const densityInitial = interpolateDensity(initialAltitude);
+    const dragAcceleration = 0.5 * (cd * frontalArea / mass) * densityInitial * Math.pow(ORBITAL_VELOCITY, 2);
+    const semiMajorDecay = (-2 * Math.pow(aTransfer, 1.5) * dragAcceleration) / Math.sqrt(MU);
     const transferTime = Math.PI * Math.sqrt(Math.pow(aTransfer, 3) / MU);
     const dragDeltaV = (Math.abs(semiMajorDecay) * transferTime * ORBITAL_VELOCITY) / (2 * r1);
-    const dragForce = 0.5 * density * Math.pow(ORBITAL_VELOCITY, 2) * cd * frontalArea;
+    const thrustRequired = 0.5 * densityInitial * Math.pow(ORBITAL_VELOCITY, 2) * cd * frontalArea;
+
     return { 
-        totalDeltaV: baseline + dragDeltaV, dragDeltaV, transferTime, dragForce, 
-        power: dragForce / THRUSTERS[thruster].tp, impulse: mass * (baseline + dragDeltaV), semiMajorDecay 
+      totalDeltaV: baseline + dragDeltaV, 
+      dragDeltaV, 
+      transferTime, 
+      thrustRequired, 
+      powerRequired: thrustRequired / THRUSTERS[thruster].tp, 
+      totalImpulse: mass * (baseline + dragDeltaV), 
+      semiMajorDecay 
     };
   }, [services, initialAltitude, finalAltitude, cd, frontalArea, mass, thruster]);
 
+  // 2. Orbit Maintenance (Station Keeping) Logic
   const stationKeeping = useMemo(() => {
     if (!services.includes("stationKeeping")) return null;
     const density = interpolateDensity(skAltitude);
     const thrustReq = 0.5 * density * Math.pow(ORBITAL_VELOCITY, 2) * cd * frontalArea;
     const totalImpulse = thrustReq * (duration * 365.25 * 24 * 3600);
-    return { thrustReq, totalImpulse, propMass: totalImpulse / ionVelocity, powerReq: thrustReq / THRUSTERS[thruster].tp };
+    return { 
+      thrustReq, 
+      totalImpulse, 
+      propMass: totalImpulse / ionVelocity, 
+      powerReq: thrustReq / THRUSTERS[thruster].tp,
+      density
+    };
   }, [services, skAltitude, duration, cd, frontalArea, ionVelocity, thruster]);
 
+  // 3. Deorbiting Logic
   const deorbit = useMemo(() => {
     if (!services.includes("deorbiting")) return null;
     const density = interpolateDensity(deorbitAltitude);
-    const r1 = EARTH_RADIUS + deorbitAltitude * 1000;
-    const dragAcc = 0.5 * (cd * frontalArea / mass) * density * Math.pow(ORBITAL_VELOCITY, 2);
-    const r2 = EARTH_RADIUS + 100000;
+    const r1 = EARTH_RADIUS + deorbitAltitude * 1000, r2 = EARTH_RADIUS + 100000;
     const aTransfer = (r1 + r2) / 2;
+    const dragAcc = 0.5 * (cd * frontalArea / mass) * density * Math.pow(ORBITAL_VELOCITY, 2);
     const baseline = Math.abs(Math.sqrt(MU / r1) * (1 - Math.sqrt((2 * r2) / (r1 + r2))));
     const transferTime = Math.PI * Math.sqrt(Math.pow(aTransfer, 3) / MU);
     const dragDeltaV = (Math.abs(dragAcc) * transferTime * ORBITAL_VELOCITY) / (2 * r1);
-    return { ballisticCoeff: mass / (cd * frontalArea), totalDeltaV: Math.max(0, baseline - dragDeltaV), dragAcc };
+    
+    return { 
+      ballisticCoeff: mass / (cd * frontalArea), 
+      totalDeltaV: Math.max(0, baseline - dragDeltaV), 
+      dragAcc,
+      dragForce: 0.5 * density * Math.pow(ORBITAL_VELOCITY, 2) * cd * frontalArea
+    };
   }, [services, deorbitAltitude, cd, frontalArea, mass]);
 
   return (
-    <div className="min-h-screen bg-[#0a0f14] text-slate-200 font-sans p-4 md:p-8">
+    <div className="min-h-screen bg-[#0a0f14] text-slate-200 p-4 md:p-8">
       <div className="mx-auto max-w-7xl grid lg:grid-cols-[360px_1fr] gap-8">
         <aside className="bg-slate-900/50 border border-slate-800 p-8 rounded-3xl h-fit space-y-6 shadow-2xl backdrop-blur-xl">
-          <h1 className="text-3xl font-black italic text-white">JivaJet <span className="text-cyan-400 not-italic font-light">Mission</span></h1>
-          
+          <h1 className="text-3xl font-black italic text-white underline decoration-cyan-500/30">JivaJet Mission</h1>
           <div className="space-y-4">
             <SelectGroup label="Platform" value={platform} onChange={(val: string) => { setPlatform(val); setIsOverride(false); }} options={["3U", "6U", "12U", "24U", "Custom"]} />
-            
-            <div className="relative group">
-              <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest flex justify-between">
-                Frontal Area (m²)
-                <button onClick={() => setIsOverride(!isOverride)} className={`text-[9px] px-2 rounded ${isOverride ? 'bg-cyan-500 text-black' : 'bg-slate-800 text-slate-400'}`}>
-                  {isOverride ? "OVERRIDE ACTIVE" : "AUTO"}
-                </button>
-              </label>
-              <input type="number" value={frontalArea} onChange={(e) => { setFrontalArea(Number(e.target.value)); setIsOverride(true); }} className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white focus:border-cyan-500/50 outline-none" />
-            </div>
-
+            <InputGroup label="Frontal Area" unit="m²" value={frontalArea} onChange={(val: number) => { setFrontalArea(val); setIsOverride(true); }} />
             <InputGroup label="Mass" unit="kg" value={mass} onChange={setMass} />
             <InputGroup label="Drag Coeff" unit="Cd" value={cd} onChange={setCd} step={0.1} />
             <SelectGroup label="Thruster" value={thruster} onChange={setThruster} options={["EMCAT", "EMCAT MPD", "JJDrive"]} />
             
             <div className="pt-4 border-t border-slate-800 space-y-2">
+              <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest mb-2">Select Services</p>
               {(["orbitRaising", "stationKeeping", "deorbiting"] as Service[]).map((s) => (
-                <button key={s} onClick={() => setServices(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])} className={`w-full flex items-center gap-3 p-3 rounded-xl border text-sm capitalize ${services.includes(s) ? 'border-cyan-500/50 bg-cyan-500/10 text-white' : 'border-slate-800 text-slate-500'}`}>
-                  <div className={`w-2 h-2 rounded-full ${services.includes(s) ? 'bg-cyan-400' : 'bg-slate-700'}`} /> {s.replace(/([A-Z])/g, ' $1')}
+                <button key={s} onClick={() => setServices(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])} className={`w-full flex items-center gap-3 p-3 rounded-xl border text-sm capitalize ${services.includes(s) ? 'border-cyan-500/50 bg-cyan-500/10 text-white shadow-[0_0_15px_rgba(34,211,238,0.1)]' : 'border-slate-800 text-slate-500'}`}>
+                  <div className={`w-2 h-2 rounded-full ${services.includes(s) ? 'bg-cyan-400 shadow-[0_0_8px_cyan]' : 'bg-slate-700'}`} /> {s.replace(/([A-Z])/g, ' $1')}
                 </button>
               ))}
             </div>
@@ -135,53 +145,58 @@ export default function App() {
         </aside>
 
         <main className="space-y-8">
-          {/* ORBIT RAISING SECTION */}
+          {/* ORBIT RAISING */}
           {orbitRaising && (
-            <section className="bg-slate-900/30 border border-cyan-500/20 rounded-3xl p-8 backdrop-blur-md">
-              <h2 className="text-2xl font-black text-cyan-400 mb-8 italic">Orbit Raising</h2>
+            <SectionFrame title="Orbit Raising" color="text-cyan-400" borderColor="border-cyan-500/20">
               <div className="grid md:grid-cols-2 gap-4 mb-8">
                 <InputGroup label="Initial Alt" unit="km" value={initialAltitude} onChange={setInitialAltitude} />
-                <InputGroup label="Final Alt" unit="km" value={finalAltitude} onChange={setFinalAltitude} />
+                <InputGroup label="Final Alt" unit="km" value={finalAltitude} onChange={setInitialAltitude} />
               </div>
               <div className="grid md:grid-cols-2 gap-4">
-                <ResultCard title="Total Delta V" value={orbitRaising.totalDeltaV.toFixed(2)} unit="m/s" />
-                <ResultCard title="Drag Correction ΔV" value={orbitRaising.dragDeltaV.toFixed(4)} unit="m/s" />
-                <ResultCard title="Time to Raise" value={(orbitRaising.transferTime / 60).toFixed(1)} unit="min" />
-                <ResultCard title="Decay Rate" value={orbitRaising.semiMajorDecay.toExponential(3)} unit="m/s" />
+                <ResultCard title="Total Delta V" value={orbitRaising.totalDeltaV.toFixed(2)} unit="m/s" color="text-cyan-400" />
+                <ResultCard title="Drag Correction ΔV" value={orbitRaising.dragDeltaV.toFixed(4)} unit="m/s" color="text-cyan-400" />
+                <ResultCard title="Raise Time" value={(orbitRaising.transferTime / 60).toFixed(1)} unit="min" color="text-cyan-400" />
+                <ResultCard title="Thrust Required" value={orbitRaising.thrustRequired.toExponential(3)} unit="N" color="text-cyan-400" />
+                <ResultCard title="Power Required" value={orbitRaising.powerRequired.toFixed(2)} unit="W" color="text-cyan-400" />
+                <ResultCard title="Total Impulse" value={orbitRaising.totalImpulse.toFixed(2)} unit="N·s" color="text-cyan-400" />
+                <ResultCard title="Decay Rate" value={orbitRaising.semiMajorDecay.toExponential(3)} unit="m/s" color="text-cyan-400" />
+                <ResultCard title="Power Margin" value={(powerAvailable - orbitRaising.powerRequired).toFixed(2)} unit="W" color="text-cyan-400" />
               </div>
-            </section>
+            </SectionFrame>
           )}
 
-          {/* STATION KEEPING SECTION */}
+          {/* ORBIT MAINTENANCE */}
           {stationKeeping && (
-            <section className="bg-slate-900/30 border border-emerald-500/20 rounded-3xl p-8 backdrop-blur-md">
-              <h2 className="text-2xl font-black text-emerald-400 mb-8 italic">Orbit Maintenance</h2>
-              <div className="grid md:grid-cols-2 gap-4 mb-8">
-                <InputGroup label="Orbit Altitude" unit="km" value={skAltitude} onChange={setSkAltitude} />
-                <InputGroup label="Duration" unit="Years" value={duration} onChange={setDuration} />
+            <SectionFrame title="Orbit Maintenance" color="text-emerald-400" borderColor="border-emerald-500/20">
+              <div className="grid md:grid-cols-3 gap-4 mb-8">
+                <InputGroup label="Target Alt" unit="km" value={skAltitude} onChange={setSkAltitude} />
+                <InputGroup label="Life" unit="Years" value={duration} onChange={setDuration} />
+                <InputGroup label="Ion Velocity" unit="m/s" value={ionVelocity} onChange={setIonVelocity} />
               </div>
               <div className="grid md:grid-cols-2 gap-4">
-                <ResultCard title="Thrust Required" value={stationKeeping.thrustReq.toExponential(3)} unit="N" color="text-emerald-400" />
-                <ResultCard title="Total Impulse" value={stationKeeping.totalImpulse.toExponential(2)} unit="N·s" color="text-emerald-400" />
+                <ResultCard title="Continuous Thrust" value={stationKeeping.thrustReq.toExponential(3)} unit="N" color="text-emerald-400" />
+                <ResultCard title="Maintenance Power" value={stationKeeping.powerReq.toFixed(2)} unit="W" color="text-emerald-400" />
+                <ResultCard title="Mission Impulse" value={stationKeeping.totalImpulse.toExponential(2)} unit="N·s" color="text-emerald-400" />
                 <ResultCard title="Propellant Mass" value={stationKeeping.propMass.toFixed(5)} unit="kg" color="text-emerald-400" />
-                <ResultCard title="Power Required" value={stationKeeping.powerReq.toFixed(2)} unit="W" color="text-emerald-400" />
+                <ResultCard title="Local Air Density" value={stationKeeping.density.toExponential(3)} unit="kg/m³" color="text-emerald-400" />
+                <ResultCard title="Power Margin" value={(powerAvailable - stationKeeping.powerReq).toFixed(2)} unit="W" color="text-emerald-400" />
               </div>
-            </section>
+            </SectionFrame>
           )}
 
-          {/* DEORBIT SECTION */}
+          {/* DEORBITING */}
           {deorbit && (
-            <section className="bg-slate-900/30 border border-rose-500/20 rounded-3xl p-8 backdrop-blur-md">
-              <h2 className="text-2xl font-black text-rose-400 mb-8 italic">Deorbiting</h2>
+            <SectionFrame title="Deorbiting" color="text-rose-400" borderColor="border-rose-500/20">
               <div className="max-w-xs mb-8">
-                <InputGroup label="Start Deorbit Alt" unit="km" value={deorbitAltitude} onChange={setDeorbitAltitude} />
+                <InputGroup label="Deorbit Start Alt" unit="km" value={deorbitAltitude} onChange={setDeorbitAltitude} />
               </div>
               <div className="grid md:grid-cols-2 gap-4">
                 <ResultCard title="Ballistic Coefficient" value={deorbit.ballisticCoeff.toFixed(2)} unit="kg/m²" color="text-rose-400" />
-                <ResultCard title="Required Delta V" value={deorbit.totalDeltaV.toFixed(2)} unit="m/s" color="text-rose-400" />
+                <ResultCard title="Deorbit Delta V" value={deorbit.totalDeltaV.toFixed(2)} unit="m/s" color="text-rose-400" />
+                <ResultCard title="Drag Force" value={deorbit.dragForce.toExponential(3)} unit="N" color="text-rose-400" />
                 <ResultCard title="Drag Acceleration" value={deorbit.dragAcc.toExponential(3)} unit="m/s²" color="text-rose-400" />
               </div>
-            </section>
+            </SectionFrame>
           )}
         </main>
       </div>
@@ -189,11 +204,22 @@ export default function App() {
   );
 }
 
+// Layout Helper
+function SectionFrame({ title, children, color, borderColor }: any) {
+  return (
+    <section className={`bg-slate-900/30 border ${borderColor} rounded-3xl p-8 backdrop-blur-md`}>
+      <h2 className={`text-2xl font-black mb-8 italic ${color}`}>{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+// Input Helpers
 function InputGroup({ label, unit, value, onChange, ...props }: any) {
   return (
-    <div className="flex-1">
+    <div className="flex-1 group">
       <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">{label} ({unit})</label>
-      <input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white focus:border-cyan-500/50 outline-none transition-all" {...props} />
+      <input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white focus:border-cyan-500/50 outline-none transition-all" {...props} />
     </div>
   );
 }
@@ -202,20 +228,21 @@ function SelectGroup({ label, value, onChange, options }: any) {
   return (
     <div>
       <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white outline-none appearance-none cursor-pointer">
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white outline-none appearance-none cursor-pointer">
         {options.map((o: string) => <option key={o} value={o}>{o}</option>)}
       </select>
     </div>
   );
 }
 
-function ResultCard({ title, value, unit, color = "text-cyan-400" }: any) {
+// Output Card Helper (Matching the reference image style)
+function ResultCard({ title, value, unit, color }: any) {
   return (
     <div className="bg-slate-900/40 border border-slate-800/60 p-6 rounded-3xl">
-      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">{title}</p>
+      <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">{title}</p>
       <div className="flex items-baseline gap-2">
         <span className={`text-3xl font-bold tracking-tight ${color}`}>{value}</span>
-        <span className={`text-sm font-bold opacity-80 ${color}`}>{unit}</span>
+        <span className={`text-sm font-bold opacity-70 ${color}`}>{unit}</span>
       </div>
     </div>
   );
