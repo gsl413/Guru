@@ -237,11 +237,6 @@ export default function App() {
           </SectionFrame>
           {/* ---> END ADDITION <--- */}
 
-        </main>
-      </div>
-    </div>
-  );
-}
 
         </main>
       </div>
