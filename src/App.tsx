@@ -64,6 +64,17 @@ export default function App() {
   const [ionVelocity, setIonVelocity] = useState(20000);
   const [deorbitAltitude, setDeorbitAltitude] = useState(500);
 
+    const [email, setEmail] = useState("");
+  const handleSendEmail = () => {
+    if (!email) {
+      alert("Please enter an email address.");
+      return;
+    }
+    alert(`Results sent to ${email}!`);
+    setEmail(""); // clear the field after sending
+  };
+  
+
   useEffect(() => {
     if (!isOverride && platform !== "Custom") {
       setFrontalArea(PLATFORM_AREAS[platform]);
@@ -202,6 +213,36 @@ export default function App() {
               </div>
             </SectionFrame>
           )}
+          
+                    {/* ---> NEW SECTION FOR THE EMAIL BOX <--- */}
+          <SectionFrame title="Send Results" color="text-violet-400" borderColor="border-violet-500/20">
+            <div className="flex flex-col md:flex-row gap-4 items-end">
+              <div className="flex-1 w-full group">
+                <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">Email Address</label>
+                <input 
+                  type="email" 
+                  value={email} 
+                  onChange={(e) => setEmail(e.target.value)} 
+                  placeholder="name@example.com"
+                  className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white focus:border-violet-500/50 outline-none transition-all placeholder:text-slate-700" 
+                />
+              </div>
+              <button 
+                onClick={handleSendEmail}
+                className="w-full md:w-auto h-[54px] px-8 bg-violet-500/20 hover:bg-violet-500/30 text-violet-400 border border-violet-500/50 rounded-xl font-bold tracking-wide transition-all shadow-[0_0_15px_rgba(139,92,246,0.1)] hover:shadow-[0_0_20px_rgba(139,92,246,0.2)]"
+              >
+                Send
+              </button>
+            </div>
+          </SectionFrame>
+          {/* ---> END ADDITION <--- */}
+
+        </main>
+      </div>
+    </div>
+  );
+}
+
         </main>
       </div>
     </div>
