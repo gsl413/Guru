@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 
 type Service = "orbitRaising" | "stationKeeping" | "deorbiting";
 type Thruster = "EMCAT" | "EMCAT MPD" | "JJDrive";
@@ -39,95 +39,91 @@ function interpolateDensity(altitude: number) {
 export default function App() {
   const [services, setServices] = useState<Service[]>(["orbitRaising"]);
   const [platform, setPlatform] = useState("6U");
-  const [customArea, setCustomArea] = useState(0.03);
   const [frontalArea, setFrontalArea] = useState(0.03);
+  const [isOverride, setIsOverride] = useState(false);
+  
   const [mass, setMass] = useState(12);
   const [cd, setCd] = useState(2.2);
   const [powerAvailable, setPowerAvailable] = useState(100);
   const [thruster, setThruster] = useState<Thruster>("EMCAT MPD");
+  
   const [initialAltitude, setInitialAltitude] = useState(300);
   const [finalAltitude, setFinalAltitude] = useState(500);
-  const [orbitAltitude, setOrbitAltitude] = useState(300);
+  const [skAltitude, setSkAltitude] = useState(300);
   const [duration, setDuration] = useState(1);
   const [ionVelocity, setIonVelocity] = useState(20000);
   const [deorbitAltitude, setDeorbitAltitude] = useState(500);
 
-  const area = platform === "Custom" ? customArea : frontalArea || PLATFORM_AREAS[platform];
+  // Sync Frontal Area with Platform Size unless overridden
+  useEffect(() => {
+    if (!isOverride && platform !== "Custom") {
+      setFrontalArea(PLATFORM_AREAS[platform]);
+    }
+  }, [platform, isOverride]);
 
   const orbitRaising = useMemo(() => {
     if (!services.includes("orbitRaising")) return null;
-    
-    const r1 = EARTH_RADIUS + initialAltitude * 1000;
-    const r2 = EARTH_RADIUS + finalAltitude * 1000;
+    const r1 = EARTH_RADIUS + initialAltitude * 1000, r2 = EARTH_RADIUS + finalAltitude * 1000;
     const aTransfer = (r1 + r2) / 2;
-    
-    // Baseline Hohmann Delta V
     const dv1 = Math.sqrt(MU / r1) * (Math.sqrt((2 * r2) / (r1 + r2)) - 1);
     const dv2 = Math.sqrt(MU / r2) * (1 - Math.sqrt((2 * r1) / (r1 + r2)));
     const baseline = Math.abs(dv1) + Math.abs(dv2);
-    
     const density = interpolateDensity(initialAltitude);
-    const dragAcceleration = 0.5 * (cd * area / mass) * density * Math.pow(ORBITAL_VELOCITY, 2);
-    
-    // Semi-Major Axis Decay Rate
-    const semiMajorDecay = (-2 * Math.pow(aTransfer, 1.5) * dragAcceleration) / Math.sqrt(MU);
-    
+    const dragAcc = 0.5 * (cd * frontalArea / mass) * density * Math.pow(ORBITAL_VELOCITY, 2);
+    const semiMajorDecay = (-2 * Math.pow(aTransfer, 1.5) * dragAcc) / Math.sqrt(MU);
     const transferTime = Math.PI * Math.sqrt(Math.pow(aTransfer, 3) / MU);
-    const deltaADrag = Math.abs(semiMajorDecay * transferTime);
-    const dragDeltaV = (deltaADrag * ORBITAL_VELOCITY) / (2 * r1);
-    
-    const dragForce = 0.5 * density * Math.pow(ORBITAL_VELOCITY, 2) * cd * area;
-    const power = dragForce / THRUSTERS[thruster].tp;
-
+    const dragDeltaV = (Math.abs(semiMajorDecay) * transferTime * ORBITAL_VELOCITY) / (2 * r1);
+    const dragForce = 0.5 * density * Math.pow(ORBITAL_VELOCITY, 2) * cd * frontalArea;
     return { 
-      totalDeltaV: baseline + dragDeltaV, 
-      dragDeltaV, 
-      transferTime, 
-      dragForce, 
-      power, 
-      powerMargin: powerAvailable - power, 
-      totalImpulse: mass * (baseline + dragDeltaV), 
-      semiMajorDecay 
+        totalDeltaV: baseline + dragDeltaV, dragDeltaV, transferTime, dragForce, 
+        power: dragForce / THRUSTERS[thruster].tp, impulse: mass * (baseline + dragDeltaV), semiMajorDecay 
     };
-  }, [services, initialAltitude, finalAltitude, cd, area, mass, thruster, powerAvailable]);
+  }, [services, initialAltitude, finalAltitude, cd, frontalArea, mass, thruster]);
 
   const stationKeeping = useMemo(() => {
     if (!services.includes("stationKeeping")) return null;
-    const density = interpolateDensity(orbitAltitude);
-    const thrust = 0.5 * density * Math.pow(ORBITAL_VELOCITY, 2) * cd * area;
-    const seconds = duration * 365.25 * 24 * 3600;
-    return { impulse: thrust * seconds, propellant: (thrust * seconds) / ionVelocity, thrust, power: thrust / THRUSTERS[thruster].tp };
-  }, [services, orbitAltitude, duration, cd, area, ionVelocity, thruster]);
+    const density = interpolateDensity(skAltitude);
+    const thrustReq = 0.5 * density * Math.pow(ORBITAL_VELOCITY, 2) * cd * frontalArea;
+    const totalImpulse = thrustReq * (duration * 365.25 * 24 * 3600);
+    return { thrustReq, totalImpulse, propMass: totalImpulse / ionVelocity, powerReq: thrustReq / THRUSTERS[thruster].tp };
+  }, [services, skAltitude, duration, cd, frontalArea, ionVelocity, thruster]);
 
   const deorbit = useMemo(() => {
     if (!services.includes("deorbiting")) return null;
     const density = interpolateDensity(deorbitAltitude);
     const r1 = EARTH_RADIUS + deorbitAltitude * 1000;
-    const dragAcc = 0.5 * (cd * area / mass) * density * Math.pow(ORBITAL_VELOCITY, 2);
-    let deltaV = 0;
-    if (deorbitAltitude > 100) {
-      const r2 = EARTH_RADIUS + 100000, aTransfer = (r1 + r2) / 2;
-      const baseline = Math.abs(Math.sqrt(MU / r1) * (1 - Math.sqrt((2 * r2) / (r1 + r2))));
-      const transferTime = Math.PI * Math.sqrt(Math.pow(aTransfer, 3) / MU);
-      const dragDeltaV = (Math.abs((-2 * Math.pow(aTransfer, 1.5) * dragAcc) / Math.sqrt(MU)) * transferTime * ORBITAL_VELOCITY) / (2 * r1);
-      deltaV = Math.max(0, baseline - dragDeltaV);
-    }
-    return { deltaV, ballisticCoefficient: mass / (cd * area) };
-  }, [services, deorbitAltitude, cd, area, mass]);
+    const dragAcc = 0.5 * (cd * frontalArea / mass) * density * Math.pow(ORBITAL_VELOCITY, 2);
+    const r2 = EARTH_RADIUS + 100000;
+    const aTransfer = (r1 + r2) / 2;
+    const baseline = Math.abs(Math.sqrt(MU / r1) * (1 - Math.sqrt((2 * r2) / (r1 + r2))));
+    const transferTime = Math.PI * Math.sqrt(Math.pow(aTransfer, 3) / MU);
+    const dragDeltaV = (Math.abs(dragAcc) * transferTime * ORBITAL_VELOCITY) / (2 * r1);
+    return { ballisticCoeff: mass / (cd * frontalArea), totalDeltaV: Math.max(0, baseline - dragDeltaV), dragAcc };
+  }, [services, deorbitAltitude, cd, frontalArea, mass]);
 
   return (
     <div className="min-h-screen bg-[#0a0f14] text-slate-200 font-sans p-4 md:p-8">
       <div className="mx-auto max-w-7xl grid lg:grid-cols-[360px_1fr] gap-8">
-        {/* Sidebar Controls */}
-        <aside className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 p-8 rounded-3xl h-fit space-y-6 shadow-2xl">
+        <aside className="bg-slate-900/50 border border-slate-800 p-8 rounded-3xl h-fit space-y-6 shadow-2xl backdrop-blur-xl">
           <h1 className="text-3xl font-black italic text-white">JivaJet <span className="text-cyan-400 not-italic font-light">Mission</span></h1>
+          
           <div className="space-y-4">
-            <SelectGroup label="Platform" value={platform} onChange={setPlatform} options={["3U", "6U", "12U", "24U", "Custom"]} />
-            <InputGroup label="Frontal Area" unit="m²" value={frontalArea} onChange={setFrontalArea} />
+            <SelectGroup label="Platform" value={platform} onChange={(val: string) => { setPlatform(val); setIsOverride(false); }} options={["3U", "6U", "12U", "24U", "Custom"]} />
+            
+            <div className="relative group">
+              <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest flex justify-between">
+                Frontal Area (m²)
+                <button onClick={() => setIsOverride(!isOverride)} className={`text-[9px] px-2 rounded ${isOverride ? 'bg-cyan-500 text-black' : 'bg-slate-800 text-slate-400'}`}>
+                  {isOverride ? "OVERRIDE ACTIVE" : "AUTO"}
+                </button>
+              </label>
+              <input type="number" value={frontalArea} onChange={(e) => { setFrontalArea(Number(e.target.value)); setIsOverride(true); }} className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white focus:border-cyan-500/50 outline-none" />
+            </div>
+
             <InputGroup label="Mass" unit="kg" value={mass} onChange={setMass} />
             <InputGroup label="Drag Coeff" unit="Cd" value={cd} onChange={setCd} step={0.1} />
-            <InputGroup label="Power Avail." unit="W" value={powerAvailable} onChange={setPowerAvailable} />
             <SelectGroup label="Thruster" value={thruster} onChange={setThruster} options={["EMCAT", "EMCAT MPD", "JJDrive"]} />
+            
             <div className="pt-4 border-t border-slate-800 space-y-2">
               {(["orbitRaising", "stationKeeping", "deorbiting"] as Service[]).map((s) => (
                 <button key={s} onClick={() => setServices(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])} className={`w-full flex items-center gap-3 p-3 rounded-xl border text-sm capitalize ${services.includes(s) ? 'border-cyan-500/50 bg-cyan-500/10 text-white' : 'border-slate-800 text-slate-500'}`}>
@@ -138,43 +134,66 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Main Output */}
-        <main className="space-y-6">
+        <main className="space-y-8">
+          {/* ORBIT RAISING SECTION */}
           {orbitRaising && (
             <section className="bg-slate-900/30 border border-cyan-500/20 rounded-3xl p-8 backdrop-blur-md">
               <h2 className="text-2xl font-black text-cyan-400 mb-8 italic">Orbit Raising</h2>
-              <div className="grid md:grid-cols-2 gap-6 mb-10">
-                <InputGroup label="Initial Orbit Altitude" unit="km" value={initialAltitude} onChange={setInitialAltitude} />
-                <InputGroup label="Final Orbit Altitude" unit="km" value={finalAltitude} onChange={setFinalAltitude} />
+              <div className="grid md:grid-cols-2 gap-4 mb-8">
+                <InputGroup label="Initial Alt" unit="km" value={initialAltitude} onChange={setInitialAltitude} />
+                <InputGroup label="Final Alt" unit="km" value={finalAltitude} onChange={setFinalAltitude} />
               </div>
-              
-              {/* Output Grid matching your Image */}
               <div className="grid md:grid-cols-2 gap-4">
-                <ResultCard title="Total Delta V" value={`${orbitRaising.totalDeltaV.toFixed(2)}`} unit="m/s" />
-                <ResultCard title="Drag Correction Delta V" value={`${orbitRaising.dragDeltaV.toFixed(4)}`} unit="m/s" />
-                <ResultCard title="Time to Raise Orbit" value={`${(orbitRaising.transferTime / 60).toFixed(1)}`} unit="min" />
-                <ResultCard title="Drag at Initial Orbit" value={`${orbitRaising.dragForce.toExponential(3)}`} unit="N" />
-                <ResultCard title="Power Required" value={`${orbitRaising.power.toFixed(2)}`} unit="W" />
-                <ResultCard title="Power Margin" value={`${orbitRaising.powerMargin.toFixed(2)}`} unit="W" />
-                <ResultCard title="Total Impulse" value={`${orbitRaising.totalImpulse.toFixed(2)}`} unit="N·s" />
-                <ResultCard title="Semi-Major Axis Decay Rate" value={`${orbitRaising.semiMajorDecay.toExponential(3)}`} unit="m/s" />
+                <ResultCard title="Total Delta V" value={orbitRaising.totalDeltaV.toFixed(2)} unit="m/s" />
+                <ResultCard title="Drag Correction ΔV" value={orbitRaising.dragDeltaV.toFixed(4)} unit="m/s" />
+                <ResultCard title="Time to Raise" value={(orbitRaising.transferTime / 60).toFixed(1)} unit="min" />
+                <ResultCard title="Decay Rate" value={orbitRaising.semiMajorDecay.toExponential(3)} unit="m/s" />
               </div>
             </section>
           )}
 
-          {/* ... Station Keeping and Deorbit sections can follow same ResultCard pattern ... */}
+          {/* STATION KEEPING SECTION */}
+          {stationKeeping && (
+            <section className="bg-slate-900/30 border border-emerald-500/20 rounded-3xl p-8 backdrop-blur-md">
+              <h2 className="text-2xl font-black text-emerald-400 mb-8 italic">Orbit Maintenance</h2>
+              <div className="grid md:grid-cols-2 gap-4 mb-8">
+                <InputGroup label="Orbit Altitude" unit="km" value={skAltitude} onChange={setSkAltitude} />
+                <InputGroup label="Duration" unit="Years" value={duration} onChange={setDuration} />
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
+                <ResultCard title="Thrust Required" value={stationKeeping.thrustReq.toExponential(3)} unit="N" color="text-emerald-400" />
+                <ResultCard title="Total Impulse" value={stationKeeping.totalImpulse.toExponential(2)} unit="N·s" color="text-emerald-400" />
+                <ResultCard title="Propellant Mass" value={stationKeeping.propMass.toFixed(5)} unit="kg" color="text-emerald-400" />
+                <ResultCard title="Power Required" value={stationKeeping.powerReq.toFixed(2)} unit="W" color="text-emerald-400" />
+              </div>
+            </section>
+          )}
+
+          {/* DEORBIT SECTION */}
+          {deorbit && (
+            <section className="bg-slate-900/30 border border-rose-500/20 rounded-3xl p-8 backdrop-blur-md">
+              <h2 className="text-2xl font-black text-rose-400 mb-8 italic">Deorbiting</h2>
+              <div className="max-w-xs mb-8">
+                <InputGroup label="Start Deorbit Alt" unit="km" value={deorbitAltitude} onChange={setDeorbitAltitude} />
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
+                <ResultCard title="Ballistic Coefficient" value={deorbit.ballisticCoeff.toFixed(2)} unit="kg/m²" color="text-rose-400" />
+                <ResultCard title="Required Delta V" value={deorbit.totalDeltaV.toFixed(2)} unit="m/s" color="text-rose-400" />
+                <ResultCard title="Drag Acceleration" value={deorbit.dragAcc.toExponential(3)} unit="m/s²" color="text-rose-400" />
+              </div>
+            </section>
+          )}
         </main>
       </div>
     </div>
   );
 }
 
-// Utility Components
 function InputGroup({ label, unit, value, onChange, ...props }: any) {
   return (
     <div className="flex-1">
-      <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-tighter">{label} ({unit})</label>
-      <input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-4 text-xl text-white outline-none focus:border-cyan-500/50 transition-all" {...props} />
+      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">{label} ({unit})</label>
+      <input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white focus:border-cyan-500/50 outline-none transition-all" {...props} />
     </div>
   );
 }
@@ -182,21 +201,21 @@ function InputGroup({ label, unit, value, onChange, ...props }: any) {
 function SelectGroup({ label, value, onChange, options }: any) {
   return (
     <div>
-      <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-tighter">{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-4 text-lg text-white outline-none appearance-none">
+      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-lg text-white outline-none appearance-none cursor-pointer">
         {options.map((o: string) => <option key={o} value={o}>{o}</option>)}
       </select>
     </div>
   );
 }
 
-function ResultCard({ title, value, unit }: any) {
+function ResultCard({ title, value, unit, color = "text-cyan-400" }: any) {
   return (
-    <div className="bg-slate-900/40 border border-slate-800/60 p-6 rounded-3xl shadow-inner">
-      <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">{title}</p>
+    <div className="bg-slate-900/40 border border-slate-800/60 p-6 rounded-3xl">
+      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">{title}</p>
       <div className="flex items-baseline gap-2">
-        <span className="text-3xl font-bold text-cyan-400 tracking-tight">{value}</span>
-        <span className="text-lg font-bold text-cyan-400/80">{unit}</span>
+        <span className={`text-3xl font-bold tracking-tight ${color}`}>{value}</span>
+        <span className={`text-sm font-bold opacity-80 ${color}`}>{unit}</span>
       </div>
     </div>
   );
