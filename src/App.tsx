@@ -173,10 +173,10 @@ export default function App() {
                 <ResultCard title="Total Delta V" value={orbitRaising.totalDeltaV.toFixed(2)} unit="m/s" color="text-cyan-400" />
                 <ResultCard title="Drag Correction ΔV" value={orbitRaising.dragDeltaV.toFixed(4)} unit="m/s" color="text-cyan-400" />
                 <ResultCard title="Raise Time" value={(orbitRaising.transferTime / 60).toFixed(1)} unit="min" color="text-cyan-400" />
-                <ResultCard title="Thrust Required" value={orbitRaising.thrustRequired.toExponential(3)} unit="N" color="text-cyan-400" />
+                <ResultCard title="Thrust Required" value={formatScientific(orbitRaising.thrustRequired, 3)} unit="N" color="text-cyan-400" />
                 <ResultCard title="Power Required" value={orbitRaising.powerRequired.toFixed(2)} unit="W" color="text-cyan-400" />
                 <ResultCard title="Total Impulse" value={orbitRaising.totalImpulse.toFixed(2)} unit="N·s" color="text-cyan-400" />
-                <ResultCard title="Decay Rate" value={orbitRaising.semiMajorDecay.toExponential(3)} unit="m/s" color="text-cyan-400" />
+                <ResultCard title="Decay Rate" value={formatScientific(orbitRaising.semiMajorDecay, 3)} unit="m/s" color="text-cyan-400" />
                 <ResultCard title="Power Margin" value={(powerAvailable - orbitRaising.powerRequired).toFixed(2)} unit="W" color="text-cyan-400" />
               </div>
             </SectionFrame>
@@ -190,11 +190,11 @@ export default function App() {
                 <InputGroup label="Ion Velocity" unit="m/s" value={ionVelocity} onChange={setIonVelocity} />
               </div>
               <div className="grid md:grid-cols-2 gap-4">
-                <ResultCard title="Continuous Thrust" value={stationKeeping.thrustReq.toExponential(3)} unit="N" color="text-emerald-400" />
+                <ResultCard title="Continuous Thrust" value={formatScientific(stationKeeping.thrustReq, 3)} unit="N" color="text-emerald-400" />
                 <ResultCard title="Maintenance Power" value={stationKeeping.powerReq.toFixed(2)} unit="W" color="text-emerald-400" />
-                <ResultCard title="Mission Impulse" value={stationKeeping.totalImpulse.toExponential(2)} unit="N·s" color="text-emerald-400" />
+                <ResultCard title="Mission Impulse" value={formatScientific(stationKeeping.totalImpulse, 2)} unit="N·s" color="text-emerald-400" />
                 <ResultCard title="Propellant Mass" value={stationKeeping.propMass.toFixed(5)} unit="kg" color="text-emerald-400" />
-                <ResultCard title="Local Air Density" value={stationKeeping.density.toExponential(3)} unit="kg/m³" color="text-emerald-400" />
+                <ResultCard title="Local Air Density" value={formatScientific(stationKeeping.density, 3)} unit="kg/m³" color="text-emerald-400" />
                 <ResultCard title="Power Margin" value={(powerAvailable - stationKeeping.powerReq).toFixed(2)} unit="W" color="text-emerald-400" />
               </div>
             </SectionFrame>
@@ -208,8 +208,8 @@ export default function App() {
               <div className="grid md:grid-cols-2 gap-4">
                 <ResultCard title="Ballistic Coefficient" value={deorbit.ballisticCoeff.toFixed(2)} unit="kg/m²" color="text-rose-400" />
                 <ResultCard title="Deorbit Delta V" value={deorbit.totalDeltaV.toFixed(2)} unit="m/s" color="text-rose-400" />
-                <ResultCard title="Initial Drag Force" value={deorbit.dragForce.toExponential(3)} unit="N" color="text-rose-400" />
-                <ResultCard title="Initial Decay Rate" value={deorbit.semiMajorDecay.toExponential(3)} unit="m/s" color="text-rose-400" />
+                <ResultCard title="Initial Drag Force" value={formatScientific(deorbit.dragForce, 3)} unit="N" color="text-rose-400" />
+                <ResultCard title="Initial Decay Rate" value={formatScientific(deorbit.semiMajorDecay, 3)} unit="m/s" color="text-rose-400" />
               </div>
             </SectionFrame>
           )}
@@ -237,6 +237,21 @@ export default function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+function formatScientific(value: number, fractionDigits: number = 3) {
+  if (value === 0) return "0";
+  const str = value.toExponential(fractionDigits);
+  const [base, exponent] = str.split("e");
+  const expNum = parseInt(exponent, 10);
+  
+  if (expNum === 0) return base;
+  
+  return (
+    <span>
+      {base} &times; 10<sup>{expNum}</sup>
+    </span>
   );
 }
 
